@@ -1,0 +1,21 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Poppins", ui-serif, Georgia, serif;
+
+  
+  --color-terra-brown: #4A3121;
+  --color-terra-green: #2D5A27;
+  --color-terra-cream: #F5F2ED;
+  --color-terra-yellow: #F4B942;
+  
+  --color-terra-brown-light: #5A3D2A;
+  --color-terra-green-light: #366B2F;
+}
+
+body {
+  background-color: var(--color-terra-cream);
+  color: var(--color-terra-brown);
+}
