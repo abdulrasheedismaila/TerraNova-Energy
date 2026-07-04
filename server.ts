@@ -2,20 +2,36 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const DB_FILE = path.join(process.cwd(), 'data.json');
 
-// Initialize DB if not exists
+// Initialize DB if not exists (Fallback local storage)
 if (!fs.existsSync(DB_FILE)) {
   fs.writeFileSync(DB_FILE, JSON.stringify({ images: [], videos: [] }));
 }
 
-function getDb() {
+function getLocalDb() {
   return JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
 }
 
-function saveDb(data: any) {
+function saveLocalDb(data: any) {
   fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+}
+
+let supabaseClient: SupabaseClient | null = null;
+
+function getSupabase() {
+  if (!supabaseClient) {
+    let url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (url && key) {
+      // Fix common user copy-paste errors with Supabase URLs
+      url = url.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
+      supabaseClient = createClient(url, key);
+    }
+  }
+  return supabaseClient;
 }
 
 async function startServer() {
@@ -45,36 +61,72 @@ async function startServer() {
   };
 
   // Get Media
-  app.get('/api/media', (req, res) => {
-    const db = getDb();
-    res.json(db);
+  app.get('/api/media', async (req, res) => {
+    const supabase = getSupabase();
+    if (supabase) {
+      try {
+        const [imagesRes, videosRes] = await Promise.all([
+          supabase.from('images').select('*').order('created_at', { ascending: false }),
+          supabase.from('videos').select('*').order('created_at', { ascending: false })
+        ]);
+        
+        // Handle case where tables might not exist yet
+        if (imagesRes.error || videosRes.error) {
+           console.error("Supabase Error:", imagesRes.error || videosRes.error);
+           return res.json(getLocalDb()); // Fallback to local if tables missing
+        }
+        
+        res.json({ 
+          images: imagesRes.data || [], 
+          videos: videosRes.data || [] 
+        });
+      } catch (err) {
+        console.error(err);
+        res.json(getLocalDb());
+      }
+    } else {
+      // Fallback
+      res.json(getLocalDb());
+    }
   });
 
   // Upload/Add Image
-  app.post('/api/images', checkAuth, (req, res) => {
-    const { imageUrl, title } = req.body; // Can be base64 or URL
-    const db = getDb();
+  app.post('/api/images', checkAuth, async (req, res) => {
+    const { imageUrl, title } = req.body;
     const newImage = { id: Date.now().toString(), url: imageUrl, title: title || '' };
-    db.images.unshift(newImage);
-    saveDb(db);
+    
+    const supabase = getSupabase();
+    if (supabase) {
+      const { error } = await supabase.from('images').insert([newImage]);
+      if (error) return res.status(500).json({ success: false, message: error.message });
+    } else {
+      const db = getLocalDb();
+      db.images.unshift(newImage);
+      saveLocalDb(db);
+    }
+    
     res.json({ success: true, image: newImage });
   });
 
   // Delete Image
-  app.delete('/api/images/:id', checkAuth, (req, res) => {
-    const db = getDb();
-    db.images = db.images.filter((img: any) => img.id !== req.params.id);
-    saveDb(db);
+  app.delete('/api/images/:id', checkAuth, async (req, res) => {
+    const supabase = getSupabase();
+    if (supabase) {
+      const { error } = await supabase.from('images').delete().eq('id', req.params.id);
+      if (error) return res.status(500).json({ success: false, message: error.message });
+    } else {
+      const db = getLocalDb();
+      db.images = db.images.filter((img: any) => img.id !== req.params.id);
+      saveLocalDb(db);
+    }
     res.json({ success: true });
   });
 
   // Add Video
-  app.post('/api/videos', checkAuth, (req, res) => {
+  app.post('/api/videos', checkAuth, async (req, res) => {
     const { videoUrl, title } = req.body;
-    const db = getDb();
     let embedUrl = videoUrl;
     
-    // Convert YouTube URL to embed
     if (videoUrl.includes('youtube.com/watch?v=')) {
       const videoId = new URL(videoUrl).searchParams.get('v');
       embedUrl = `https://www.youtube.com/embed/${videoId}`;
@@ -85,17 +137,32 @@ async function startServer() {
       embedUrl = videoUrl.replace('/view', '/preview');
     }
 
-    const newVideo = { id: Date.now().toString(), url: embedUrl, originalUrl: videoUrl, title: title || '' };
-    db.videos.unshift(newVideo);
-    saveDb(db);
+    const newVideo = { id: Date.now().toString(), url: embedUrl, original_url: videoUrl, title: title || '' };
+    
+    const supabase = getSupabase();
+    if (supabase) {
+      const { error } = await supabase.from('videos').insert([newVideo]);
+      if (error) return res.status(500).json({ success: false, message: error.message });
+    } else {
+      const db = getLocalDb();
+      db.videos.unshift({ ...newVideo, originalUrl: videoUrl });
+      saveLocalDb(db);
+    }
+    
     res.json({ success: true, video: newVideo });
   });
 
   // Delete Video
-  app.delete('/api/videos/:id', checkAuth, (req, res) => {
-    const db = getDb();
-    db.videos = db.videos.filter((vid: any) => vid.id !== req.params.id);
-    saveDb(db);
+  app.delete('/api/videos/:id', checkAuth, async (req, res) => {
+    const supabase = getSupabase();
+    if (supabase) {
+      const { error } = await supabase.from('videos').delete().eq('id', req.params.id);
+      if (error) return res.status(500).json({ success: false, message: error.message });
+    } else {
+      const db = getLocalDb();
+      db.videos = db.videos.filter((vid: any) => vid.id !== req.params.id);
+      saveLocalDb(db);
+    }
     res.json({ success: true });
   });
 
